@@ -9,7 +9,17 @@ import UIKit
 import SceneKit
 import ARKit
 
+enum BodyType : Int {
+    case box = 1
+    case plane = 2
+    case car = 3
+}
+
 class ViewController: UIViewController, ARSCNViewDelegate {
+    
+    var planes = [overlayPlanes]()
+    
+    var boxes = [SCNNode]()
 
     @IBOutlet var sceneView: ARSCNView!
     
@@ -32,27 +42,111 @@ class ViewController: UIViewController, ARSCNViewDelegate {
 //         Set the scene to the view
         sceneView.scene = scene
         
-        let tapgesture = UITapGestureRecognizer(target: self, action: #selector(tapped))
-
-        self.sceneView.addGestureRecognizer(tapgesture)
+        registerGestureRecognizers()
         
     }
     
-    @objc func tapped(recognizer: UIGestureRecognizer){
+    
+    private func registerGestureRecognizers() {
         
-        let sceneView = recognizer.view as! SCNView
+        let tapGestureRecognizer = UITapGestureRecognizer(target: self, action: #selector(tapped))
+        tapGestureRecognizer.numberOfTapsRequired = 1
+        
+        let doubletapGestureRecognizer = UITapGestureRecognizer(target: self, action: #selector(doubletapp))
+        doubletapGestureRecognizer.numberOfTapsRequired = 2
+        
+        tapGestureRecognizer.require(toFail: doubletapGestureRecognizer)
+        
+        self.sceneView.addGestureRecognizer(tapGestureRecognizer)
+        self.sceneView.addGestureRecognizer(doubletapGestureRecognizer)
+    }
+    
+    
+    @objc func doubletapp(recognizer: UIGestureRecognizer){
+        
+        let sceneView = recognizer.view as! ARSCNView
         let touchLocation = recognizer.location(in: sceneView)
-        let hitTouch = sceneView.hitTest(touchLocation, options: [:])
         
-        if !hitTouch.isEmpty {
-            let node = hitTouch[0].node
-            let material = node.geometry?.material(named: "Color")
-            material?.diffuse.contents = UIColor.blue
+        let hitResults = sceneView.hitTest(touchLocation, options: [:])
+        
+        if !hitResults.isEmpty {
+            
+            guard let hitResult = hitResults.first else {
+                return
+            }
+            
+            let node = hitResult.node
+            
+            node.physicsBody?.applyForce(SCNVector3(hitResult.worldCoordinates.x * Float(2.0), 2.0, hitResult.worldCoordinates.z * Float(2.0)), asImpulse: true)
+            
         }
         
     }
     
     
+    @objc func tapped(recognizer: UIGestureRecognizer){
+    
+        let sceneView = recognizer.view as! ARSCNView
+        let touchLocation = recognizer.location(in: sceneView)
+
+        guard let query = sceneView.raycastQuery(from: touchLocation, allowing: .estimatedPlane, alignment: .horizontal) else {return}
+
+        guard let results = sceneView.session.raycast(query).first else{
+            return
+        }
+        addModel(hitResults: results)
+       
+        
+    }
+    
+    
+    
+    func addModel(hitResults: ARRaycastResult){
+        
+        
+        let scene = SCNScene(named: "chair.dae")!
+        
+        let node = scene.rootNode.childNode(withName: "SketchUp", recursively: true)
+            
+        node?.position = SCNVector3(x: hitResults.worldTransform.columns.3.x, y: hitResults.worldTransform.columns.3.y, z: hitResults.worldTransform.columns.3.z)
+            
+        node?.scale = SCNVector3(0.2,0.2,0.2)
+            
+        self.sceneView.scene.rootNode.addChildNode(node!)
+            
+        print("here ")
+        
+        
+    }
+    
+    func addBox(hitResult: ARRaycastResult){
+        
+        print("Im added")
+        
+        let boxGeometry = SCNBox(width: 0.2, height: 0.2, length: 0.1, chamferRadius: 0)
+        
+        let material = SCNMaterial()
+        material.diffuse.contents = UIColor.red
+        boxGeometry.materials = [material]
+        
+        
+        let boxNode = SCNNode(geometry: boxGeometry)
+        //adding physics to box
+        boxNode.physicsBody = SCNPhysicsBody(type: .dynamic, shape: nil)
+        //adding collision to box
+        boxNode.physicsBody?.categoryBitMask = BodyType.box.rawValue
+        
+        self.boxes.append(boxNode)
+        //for flat position
+//        boxNode.position = SCNVector3(hitResult.worldTransform.columns.3.x,hitResult.worldTransform.columns.3.y + Float(boxGeometry.height/2), hitResult.worldTransform.columns.3.z)
+        
+        //for above the plane to see physics on object
+        
+        boxNode.position = SCNVector3(hitResult.worldTransform.columns.3.x,hitResult.worldTransform.columns.3.y +    Float(0.5), hitResult.worldTransform.columns.3.z)
+        
+        self.sceneView.scene.rootNode.addChildNode(boxNode)
+        
+    }
     
     
     override func viewWillAppear(_ animated: Bool) {
@@ -77,18 +171,41 @@ class ViewController: UIViewController, ARSCNViewDelegate {
     
     
     func renderer(_ renderer: SCNSceneRenderer, didAdd node: SCNNode, for anchor: ARAnchor) {
-        DispatchQueue.main.async {
-           
-            self.label.text = "Plane Detected"
-            
-            UIView.animate(withDuration: 0.3) {
-                self.label.alpha = 1.0
-            } completion: { (Bool) in
-                self.label.alpha = 0.0
-            }
+        
+//        DispatchQueue.main.async {
+//
+//            self.label.text = "Plane Detected"
+//
+//            UIView.animate(withDuration: 0.3) {
+//                self.label.alpha = 1.0
+//            } completion: { (Bool) in
+//                self.label.alpha = 0.0
+//            }
+//        }
+        
+        if !(anchor is ARPlaneAnchor) {
+            return
         }
+        
+        let plane = overlayPlanes(anchor: anchor as! ARPlaneAnchor)
+        self.planes.append(plane)
+        node.addChildNode(plane)
+        
     }
     
+    
+    func renderer(_ renderer: SCNSceneRenderer, didUpdate node: SCNNode, for anchor: ARAnchor) {
+        
+        let plane = self.planes.filter { plane in
+            return plane.anchor.identifier == anchor.identifier
+            }.first
+        
+        if plane == nil {
+            return
+        }
+        
+        plane?.update(anchor: anchor as! ARPlaneAnchor)
+    }
     
     
     
@@ -130,18 +247,19 @@ class ViewController: UIViewController, ARSCNViewDelegate {
     
     
     
+    
     @IBAction func button(_ sender: UIButton) {
         
-        if sender.titleLabel?.text == "Box"{
-            print("Im here")
-            
-            showBox()
-            
-            btn.setTitle("Text", for: .normal)
-        }else{
-            showText()
-            btn.setTitle("Box", for: .normal)
-        }
+//        if sender.titleLabel?.text == "Box"{
+//            print("Im here")
+//
+//            showBox()
+//
+//            btn.setTitle("Text", for: .normal)
+//        }else{
+//            showText()
+//            btn.setTitle("Box", for: .normal)
+//        }
         
     }
     
